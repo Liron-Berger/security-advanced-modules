@@ -20,7 +20,10 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
@@ -41,6 +44,9 @@ import org.elasticsearch.index.query.QueryShardContext;
 import com.amazon.opendistroforelasticsearch.security.support.OpenDistroSecurityDeprecationHandler;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+
+
+import org.apache.logging.log4j.Logger;
 
 
 final class DlsQueryParser {
@@ -67,6 +73,7 @@ final class DlsQueryParser {
 
     static Query parse(final Set<String> unparsedDlsQueries, final QueryShardContext queryShardContext,
             final NamedXContentRegistry namedXContentRegistry) throws IOException {
+        final Logger logger = LogManager.getLogger("DlsQueryParser.parse");
 
         if (unparsedDlsQueries == null || unparsedDlsQueries.isEmpty()) {
             return null;
@@ -77,7 +84,12 @@ final class DlsQueryParser {
         BooleanQuery.Builder dlsQueryBuilder = new BooleanQuery.Builder();
         dlsQueryBuilder.setMinimumNumberShouldMatch(1);
 
-        for (final String unparsedDlsQuery : unparsedDlsQueries) {
+        for (final String unformattedDlsQuery : unparsedDlsQueries) {
+
+            String unparsedDlsQuery = handleListWithQuotes(unformattedDlsQuery);
+
+            logger.debug("unformatted: " + unformattedDlsQuery + "\n" + "formatted: " + unparsedDlsQuery);
+            
             try {
 
                 final QueryBuilder qb = queries.get(unparsedDlsQuery, new Callable<QueryBuilder>() {
@@ -99,7 +111,7 @@ final class DlsQueryParser {
                 }
 
             } catch (ExecutionException e) {
-                throw new IOException(e);
+                    throw new IOException(e);
             }
         }
 
@@ -117,4 +129,32 @@ final class DlsQueryParser {
     }
 
 
+    private static String handleListWithQuotes(String unparsedDlsQuery) {
+        String patternString = "\"authorized_cns.raw\": \\[";
+        String barcketCloser = "\\]";
+
+        Pattern pattern = Pattern.compile(patternString);
+        Pattern bracket = Pattern.compile(barcketCloser);
+
+        Matcher matcher = pattern.matcher(unparsedDlsQuery);
+
+        int count = 0;
+
+        while(matcher.find()) {
+            count++;
+
+            String authorized_to_end = unparsedDlsQuery.substring(matcher.end(), unparsedDlsQuery.length());
+            Matcher authorized_matcher = bracket.matcher(authorized_to_end);
+            authorized_matcher.find();
+
+            String authorized_cns = authorized_to_end.substring(0, authorized_matcher.start());
+
+            for (String cn : authorized_cns.split(",")) {
+                cn = cn.substring(1, cn.length() - 1);
+                System.out.println(cn.replace("\"", "\\\""));
+                unparsedDlsQuery = unparsedDlsQuery.replace(cn, cn.replace("\"", "\\\""));
+            }
+        }
+        return unparsedDlsQuery;
+    }
 }
